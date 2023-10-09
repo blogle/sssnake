@@ -1,0 +1,17 @@
+{
+  "lockfile_version": "1",
+  "packages": {
+    "cudaPackages.cudatoolkit@latest": {
+      "last_modified": "2023-09-19T14:14:51Z",
+      "resolved": "github:NixOS/nixpkgs/8b5ab8341e33322e5b66fb46ce23d724050f6606#cudaPackages.cudatoolkit",
+      "source": "devbox-search",
+      "version": "11.8.0"
+    },
+    "cudaPackages.cudnn@latest": {
+      "last_modified": "2023-09-19T14:14:51Z",
+      "resolved": "github:NixOS/nixpkgs/8b5ab8341e33322e5b66fb46ce23d724050f6606#cudaPackages.cudnn",
+      "source": "devbox-search",
+      "version": "11-cudnn-8.9.1"
+    }
+  }
+}

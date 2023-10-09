@@ -1,0 +1,22 @@
+{
+  "packages": [
+    "path:./rules#battlesnake-rules",
+    "cudaPackages.cudatoolkit@latest",
+    "cudaPackages.cudnn@latest",
+    "github:oxalica/rust-overlay/master#rust-nightly_2023-09-26"
+  ],
+  "env": {
+    "CUDA_ROOT": "$PWD/.devbox/virtenv/.wrappers",
+    "LD_LIBRARY_PATH": "/run/opengl-driver/lib/:$LIBRARY_PATH"
+  },
+  "shell": {
+    "init_hook": [
+      "echo 'Welcome to devbox!' > /dev/null"
+    ],
+    "scripts": {
+      "test": [
+        "echo \"Error: no test specified\" && exit 1"
+      ]
+    }
+  }
+}
