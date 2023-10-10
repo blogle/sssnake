@@ -8,6 +8,8 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.75"
 axum = "0.6.20"
+crossbeam = "0.8.2"
+dashmap = "5.5.3"
 dfdx = { version = "0.13.0", features = ["cuda", "cudnn", "f16", "safetensors", "nightly"]}
 serde = { version = "1.0.188", features = ["derive"] }
 rand = "0.8.4"

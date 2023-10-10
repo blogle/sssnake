@@ -6,7 +6,7 @@ pub mod strategy;
 #[derive(Deserialize)]
 pub struct Ruleset {
     name: String,
-    version: String
+    version: String,
 }
 
 #[derive(Deserialize)]
@@ -14,13 +14,13 @@ pub struct Game {
     id: String,
     ruleset: Ruleset,
     timeout: u32,
-    source: String
+    source: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub struct Coordinate {
     x: i32,
-    y: i32
+    y: i32,
 }
 
 #[derive(Deserialize)]
@@ -29,7 +29,7 @@ pub struct Board {
     width: u32,
     food: Vec<Coordinate>,
     hazards: Vec<Coordinate>,
-    pub snakes: Vec<Snake>
+    pub snakes: Vec<Snake>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,7 +41,7 @@ pub struct Snake {
     latency: String,
     head: Coordinate,
     length: u32,
-    shout: String
+    shout: String,
 }
 
 #[derive(Deserialize)]
@@ -49,21 +49,21 @@ pub struct GameState {
     game: Game,
     turn: u32,
     pub board: Board,
-    you: Option<Snake>
+    you: Snake,
 }
 
 #[derive(Serialize, Clone, Copy, Debug)]
-#[serde(rename_all="lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum Direction {
     Up = 0,
     Down = 1,
     Left = 2,
-    Right = 3
+    Right = 3,
 }
 
 #[derive(Serialize)]
 pub struct Move {
-    #[serde(rename="move")]
+    #[serde(rename = "move")]
     pub direction: Direction,
-    pub shout: String
+    pub shout: String,
 }

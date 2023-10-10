@@ -1,14 +1,12 @@
-use dfdx::prelude::*;
-use dfdx::optim::{Momentum, Sgd, SgdConfig};
+use dashmap::DashMap;
+use dfdx::data::IteratorStackExt;
 use dfdx::losses::huber_loss;
+use dfdx::optim::{Momentum, Sgd, SgdConfig};
+use dfdx::prelude::*;
 use rand::Rng;
+use std::sync::{atomic, RwLock};
 
-
-type ConvBlock<const I: usize, const O: usize> = (
-    Conv2D<I, O, 3, 1, 1>,
-    BatchNorm2D<O>,
-    ReLU,
-);
+type ConvBlock<const I: usize, const O: usize> = (Conv2D<I, O, 3, 1, 1>, BatchNorm2D<O>, ReLU);
 
 type BasicBlock<const C: usize> = Residual<(
     Conv2D<C, C, 3, 1, 1>,
@@ -25,23 +23,20 @@ type ResNet9 = (
     (ConvBlock<128, 256>, MaxPool2D<3, 2, 1>),
     (ConvBlock<256, 512>, MaxPool2D<3, 2, 1>),
     (BasicBlock<512>, ReLU),
-    (AvgPoolGlobal, Linear<512, NUM_ACTIONS>)
+    (AvgPoolGlobal, Linear<512, NUM_ACTIONS>),
 );
 
 #[derive(Clone)]
-enum State {
-    Terminal { reward: f32 },
-    NonTerminal {
-        tensor: [[[f32; 11]; 11]; 6]
-    }
+struct State {
+    tensor: [[[f32; 11]; 11]; 6],
 }
 
 impl State {
     fn from_gamestate(game_state: crate::GameState) -> Self {
         let mut tensor = [[[f32::NAN; 11]; 11]; 6];
         let snakes = game_state.board.snakes;
-        
-        let my_snake = game_state.you.unwrap();
+
+        let my_snake = game_state.you;
         let my_health = my_snake.health as f32;
 
         // Otherwise we need to generate the features that we will feed into the network.
@@ -53,22 +48,17 @@ impl State {
             tensor[1][y][x] = 10.0 - segment.y as f32;
             segment = *pos;
         }
-        
+
         for pos in &game_state.board.food {
             let (x, y) = (pos.x as usize, 10 - pos.y as usize);
             tensor[4][y][x] = my_health;
         }
-        
-        // There is still an opponent on the board
-        if let Some(their_snake) = snakes 
-            .iter()
-            .find(|snake| snake.id != my_snake.id)
 
-        {
+        // There is still an opponent on the board
+        if let Some(their_snake) = snakes.iter().find(|snake| snake.id != my_snake.id) {
             let their_health = their_snake.health as f32;
             let mut segment = their_snake.head;
             let (x, y) = (segment.x as usize, 10 - segment.y as usize);
-            println!("their head {:?}", (x, y));
             for pos in &their_snake.body[1..] {
                 let (x, y) = (pos.x as usize, 10 - pos.y as usize);
                 tensor[2][y][x] = segment.x as f32;
@@ -82,7 +72,7 @@ impl State {
             }
         }
 
-        State::NonTerminal { tensor }
+        State { tensor }
     }
 }
 
@@ -92,159 +82,250 @@ struct Move {
     action: crate::Direction,
 }
 
-#[derive(Default)]
-pub struct Game {
-    model: Model,
-    prior_moves: std::collections::HashMap<String, Move>
+struct Experience {
+    action: Move,
+    q_value: f32,
 }
-
-// Hack to send gpu context across threads
-// we should cleanly handle this in the future.
-unsafe impl Send for Game {}
 
 type DQN = <ResNet9 as BuildOnDevice<AutoDevice, f32>>::Built;
-struct Model {
-    device: AutoDevice,
-    learner: DQN,
-    target: DQN,
-    gradients: Gradients<f32, AutoDevice>,
-    optimizer: Sgd<DQN, f32, AutoDevice>,
-    epsilon: f64,
+
+fn flatten(tensor: &[[[f32; 11]; 11]; 6]) -> &[f32; 6 * 11 * 11] {
+    unsafe { std::mem::transmute(tensor) }
 }
 
-impl Default for Model {
+struct ReplayBuffer {
+    buffer: crossbeam::queue::ArrayQueue<Experience>,
+}
+
+impl ReplayBuffer {
+    fn new() -> Self {
+        ReplayBuffer {
+            buffer: crossbeam::queue::ArrayQueue::new(1000),
+        }
+    }
+
+    fn push(&self, experience: Experience) {
+        let _ = self.buffer.force_push(experience);
+    }
+
+    fn pop(&self) -> Experience {
+        let backoff = crossbeam::utils::Backoff::new();
+        loop {
+            match self.buffer.pop() {
+                None if backoff.is_completed() => std::thread::park(),
+                None => backoff.spin(),
+                Some(experience) => return experience,
+            }
+        }
+    }
+
+    fn sample(&self, batch_size: usize) -> Vec<Experience> {
+        let mut experiences = Vec::with_capacity(batch_size);
+        while experiences.len() < batch_size {
+            let sample = self.pop();
+            if rand::random() {
+                experiences.push(sample);
+            } else {
+                self.buffer.force_push(sample);
+            }
+        }
+
+        experiences
+    }
+}
+
+pub struct Agent {
+    device: AutoDevice,
+    model: RwLock<DQN>,
+    prior_moves: DashMap<String, Move>,
+    epsilon: atomic::AtomicU64,
+    experiences: ReplayBuffer,
+}
+
+// It is unclear that accessing the device across threads is safe.
+// All of its fields are ARC'd, but it is not marked as Send or Sync.
+unsafe impl Send for Agent {}
+unsafe impl Sync for Agent {}
+
+impl Default for Agent {
     fn default() -> Self {
         let device = AutoDevice::default();
-        let learner = device.build_module::<ResNet9, f32>();
-        let gradients = learner.alloc_grads();
-		let target = learner.clone();
-		let optimizer = Sgd::new(
-			&learner,
-			SgdConfig {
-				lr: 1e-1,
-				momentum: Some(Momentum::Nesterov(0.9)),
-				weight_decay: None,
-			},
-		);
-
-        let epsilon = 1.0;
-        Model { device, learner, target, gradients, optimizer, epsilon }
+        let model = device.build_module::<ResNet9, f32>();
+        Self {
+            device: device,
+            model: RwLock::new(model),
+            prior_moves: DashMap::new(),
+            epsilon: atomic::AtomicU64::new(1.0f64.to_bits()),
+            experiences: ReplayBuffer::new(),
+        }
     }
 }
 
-impl Game {
-    pub fn play(&mut self, state: crate::GameState) -> crate::Direction {
-        let this_player = state.you.as_ref().unwrap().id.clone();
+impl Agent {
+    fn epsilon(&self) -> f64 {
+        f64::from_bits(self.epsilon.load(atomic::Ordering::Relaxed))
+    }
+
+    fn decay_epsilon(&self) {
+        const DECAY_RATE: f64 = 0.9995;
+        const MINIMUM_EPSILON: f64 = 0.05;
+
+        let epsilon = self.epsilon();
+        if epsilon > MINIMUM_EPSILON {
+            self.epsilon.store(
+                MINIMUM_EPSILON.max(epsilon * DECAY_RATE).to_bits(),
+                atomic::Ordering::Relaxed,
+            );
+        }
+    }
+
+    pub fn play(&self, state: crate::GameState) -> crate::Direction {
+        let my_snake = state.you.id.clone();
         let state = State::from_gamestate(state);
-        
-        let prior_move = self.prior_moves.get(&this_player);
-        let new_action = self.generate_move(prior_move.cloned(), state.clone())
-            .expect("We have not reached a terminal state so it should be possible to generate a move");
+        let model = self.model.read().unwrap();
 
-        let _ = self.prior_moves.insert(this_player, Move { state, action: new_action });
+        // Get the q values for the current state
+        let state_dev = self.device.tensor(state.tensor);
+        let q_values = model.forward(state_dev).as_vec();
 
-        println!("playing {:?}", new_action);
-        new_action
-    }
-
-    pub fn terminate_game(&mut self, state: crate::GameState) {
-        let snakes = state.board.snakes;
-        let my_snake = state.you.unwrap();
-        // Look through all the snakes on the board and see if we can find our snake,
-        // If we arent on the board then we have died and we need to assign a negative reward,
-        // if we are the only snake on the board then we have won and we need to assign a positive reward.
-        let state = if snakes.iter().find(|snake| snake.id == my_snake.id).is_none() {
-            State::Terminal { reward: -100.0 }
-        } else {
-            State::Terminal { reward: 10.0 }
-        };
-
-        // Decay epsilon
-        let minimum_epsilon = 0.1;
-        let decay_rate = 0.9995;
-        if self.model.epsilon > minimum_epsilon {
-            self.model.epsilon *= decay_rate;
-        }
-
-        let prior_move = self.prior_moves.get(&my_snake.id);
-        let None = self.generate_move(prior_move.cloned(), state.clone()) else {
-            panic!("We reached a terminal state, we should not have generated a move")
-        };
-        
-        let _ = self.prior_moves.remove(&my_snake.id);
-
-        // Update the target network
-        self.model.target.clone_from(&self.model.learner);
-    }
-
-
-    fn generate_move(&mut self, prior_move: Option<Move>, state: State) -> Option<crate::Direction> {
-        let model = &mut self.model;
-        let mut state_dev: Tensor<Rank4<1, 6, 11, 11>, f32, _> = model.device.ones();
-
-        let mut next_move = None;
-        let q_est = match state {
-            State::Terminal { reward } => model.device.tensor([reward]),
-            State::NonTerminal { ref tensor } => {
-                state_dev.copy_from(unsafe {
-                    let slice_cast: &[f32; 6 * 11 * 11] = std::mem::transmute(tensor);
-                    slice_cast
-                });
-
-                // Get the q values for the current state and then select the best action
-                let q_values_now = model.target.forward(state_dev.clone());
-
-
-                let rand_num: f64 = rand::thread_rng().gen_range(0.0..=1.0);
-                let action = if rand_num < model.epsilon {
-                    rand::thread_rng().gen_range(0..=4)
-                } else {
-                    let mut argmax = 0;
-                    let values = q_values_now.as_vec();
-                    for i in 0..4 {
-                        if values[i] > values[argmax] {
-                            argmax = i;
-                        }
-                    }
-
-                    argmax
-                };
-
-                next_move = Some(match action {
-                    0 => crate::Direction::Up,
-                    1 => crate::Direction::Down,
-                    2 => crate::Direction::Left,
-                    _ => crate::Direction::Right,
-                });
-
-                // Return our reward estimate
-                q_values_now.max::<Rank1<1>, _>() * 0.99
+        // Get the argmax of the q values
+        let mut arg_max = 0;
+        for i in 0..4 {
+            if q_values[i] > q_values[arg_max] {
+                arg_max = i;
             }
-        };
-
-        if let Some(Move { state: State::NonTerminal { ref tensor }, action }) = prior_move {
-            // Learn from our last move
-            state_dev.copy_from(unsafe {
-                let slice_cast: &[f32; 6 * 11 * 11] = std::mem::transmute(tensor);
-                slice_cast
-            });
-
-            let state_dev_t: Tensor<Rank4<1, 6, 11, 11>, f32, _, OwnedTape<f32, _>> = state_dev.traced(model.gradients.to_owned());
-            let q_values_prev = model.learner.forward_mut(state_dev_t);
-
-            let action: Tensor<Rank1<1>, usize, _> = model.device.tensor([action as usize]);
-            let action_q = q_values_prev.select(action);
-            let loss = huber_loss(action_q, q_est, 1.0);
-
-            model.gradients = loss.backward();
-            model.optimizer.update(&mut model.learner, &mut model.gradients).expect("Unused params");
-            model.learner.zero_grads(&mut model.gradients);
         }
 
-        next_move
+        // Epsilon Greedy
+        let rand_num = rand::thread_rng().gen_range(0.0..=1.0);
+        let action_id = if rand_num < self.epsilon() {
+            // Explore by taking a random action
+            rand::thread_rng().gen_range(0..4)
+        } else {
+            // Exploit by playing the argmax of our q values
+            arg_max
+        };
+
+        let action = match action_id {
+            0 => crate::Direction::Up,
+            1 => crate::Direction::Down,
+            2 => crate::Direction::Left,
+            _ => crate::Direction::Right,
+        };
+
+        // Update keep a reference of the move we are taking with this snake, so that on the next
+        // turn when we have the q valuest for the resulting state we can add it to our replay
+        // buffer
+        if let Some(prior_move) = self.prior_moves.insert(my_snake, Move { state, action }) {
+            // Now that we have the target max Q in St we can add Q(St-1, At-1) to the replay buffer
+            self.experiences.push(Experience {
+                action: prior_move,
+                q_value: q_values[arg_max],
+            });
+        }
+
+        action
+    }
+
+    pub fn terminate_episode(&self, state: crate::GameState) {
+        let my_snake = state.you;
+        if let Some((_, prior_move)) = self.prior_moves.remove(&my_snake.id) {
+            let active_snakes = state.board.snakes;
+
+            // If we are the only snake on the board then we have won and we need to assign a positive reward.
+            // If we arent on the board then we have died and we need to assign a negative reward,
+            let reward = match active_snakes
+                .into_iter()
+                .find(|snake| snake.id == my_snake.id)
+            {
+                Some(_) => 10.0, // Winning is nice
+                None => -100.0,  // Losing is the awful
+            };
+
+            // Add terminal state to the replay buffer
+            self.experiences.push(Experience {
+                action: prior_move,
+                q_value: reward,
+            });
+        }
+    }
+
+    fn clone_model(&self) -> DQN {
+        let model = self.model.read().unwrap();
+        model.clone()
+    }
+
+    fn update_model(&self, new_model: &DQN) {
+        self.model.write().unwrap().clone_from(new_model);
+    }
+
+    pub fn train(self: std::sync::Arc<Self>) {
+        let mut learner = self.clone_model();
+
+        let mut optimizer = Sgd::new(
+            &learner,
+            SgdConfig {
+                lr: 1e-1,
+                momentum: Some(Momentum::Nesterov(0.9)),
+                weight_decay: None,
+            },
+        );
+
+        let mut grads = learner.alloc_grads();
+
+        let start = std::time::Instant::now();
+        for epoch in 1.. {
+            let mut total_loss = 0.0;
+
+            // epoch
+            for _ in 0..20 {
+                let mut state_batch: Vec<f32> = Vec::with_capacity(128 * 6 * 11 * 11);
+                let mut action_batch = Vec::with_capacity(128);
+                let mut target_batch = Vec::with_capacity(128);
+
+                for Experience {
+                    action: Move { state, action },
+                    q_value,
+                } in self.experiences.sample(128)
+                {
+                    state_batch.extend(flatten(&state.tensor));
+                    action_batch.push(action as usize);
+                    target_batch.push(q_value)
+                }
+
+                let state_batch_dev: Tensor<Rank4<128, 6, 11, 11>, f32, _> =
+                    self.device.tensor(state_batch);
+                let action_batch_dev: Tensor<Rank1<128>, usize, _> =
+                    self.device.tensor(action_batch);
+                let target_batch_dev: Tensor<Rank1<128>, f32, _> = self.device.tensor(target_batch);
+
+                let q_values_dev = learner.forward_mut(state_batch_dev.traced(grads.to_owned()));
+                let action_q = q_values_dev.select(action_batch_dev);
+
+                let loss = huber_loss(action_q, target_batch_dev, 1.0);
+                total_loss += loss.array();
+
+                grads = loss.backward();
+                optimizer
+                    .update(&mut learner, &grads)
+                    .expect("Unused params");
+                learner.zero_grads(&mut grads);
+            }
+
+            tracing::info!(
+                epoch = epoch,
+                loss = total_loss / 20.0,
+                elapsed = ?start.elapsed(),
+            );
+
+            // Update the target network
+            self.update_model(&learner);
+
+            // Decay epsilon
+            self.decay_epsilon();
+        }
     }
 }
-
 
 #[cfg(test)]
 mod test {

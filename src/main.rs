@@ -1,18 +1,12 @@
-use anyhow::{
-    Context, 
-    Error
-};
+use anyhow::{Context, Error};
 use axum::{
     extract::State,
-    routing::{get, post},
     http::StatusCode,
     response::{IntoResponse, Response},
+    routing::{get, post},
     Json, Router,
 };
-use tower_http::{
-    classify::ServerErrorsFailureClass,
-    trace::TraceLayer
-};
+use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
 
 use tracing_subscriber::{filter, prelude::*};
 
@@ -22,7 +16,6 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug)]
 struct BotError(Error);
 
-
 #[derive(serde::Serialize)]
 struct BotInfo {
     apiversion: String,
@@ -30,9 +23,8 @@ struct BotInfo {
     color: String,
     head: String,
     tail: String,
-    version: String
+    version: String,
 }
-
 
 async fn bot_info() -> (StatusCode, Json<BotInfo>) {
     let info = BotInfo {
@@ -41,43 +33,37 @@ async fn bot_info() -> (StatusCode, Json<BotInfo>) {
         color: String::from("#FF0000"),
         head: String::from("default"),
         tail: String::from("default"),
-        version: String::from("0.0.1")
+        version: String::from("0.0.1"),
     };
 
     (StatusCode::OK, Json(info))
 }
 
-async fn initialize_state(Json(_payload): Json<sssnake::GameState>) {
-}
+async fn initialize_state(Json(_payload): Json<sssnake::GameState>) {}
 
 async fn generate_move(
-    State(game): State<Arc<Mutex<sssnake::strategy::Game>>>,
-    Json(state): Json<sssnake::GameState>
-) -> Json<sssnake::Move>
-{
-    let mut guard = game.lock().unwrap();
-
-    Json(sssnake::Move { 
+    State(agent): State<Arc<sssnake::strategy::Agent>>,
+    Json(state): Json<sssnake::GameState>,
+) -> Json<sssnake::Move> {
+    Json(sssnake::Move {
         shout: String::from("I'm a slippperry lil ssssnake!"),
-        direction: guard.play(state), 
+        direction: agent.play(state),
     })
 }
 
 async fn terminate_game(
-    State(game): State<Arc<Mutex<sssnake::strategy::Game>>>,
-    Json(state): Json<sssnake::GameState>
-)
-{
-    let mut guard = game.lock().unwrap();
-    guard.terminate_game(state);
+    State(agent): State<Arc<sssnake::strategy::Agent>>,
+    Json(state): Json<sssnake::GameState>,
+) {
+    agent.terminate_episode(state);
 }
 
 async fn agent_server() -> Result<(), Error> {
-    let agent_state = std::sync::Arc::new(
-        std::sync::Mutex::new(
-            sssnake::strategy::Game::default()
-        )
-    );
+    let agent_state = std::sync::Arc::new(sssnake::strategy::Agent::default());
+
+    // Spawn an actual thread to run our train loop
+    let agent_state_clone = agent_state.clone();
+    std::thread::spawn(|| agent_state_clone.train());
 
     let app = Router::new()
         .route("/", get(bot_info))
@@ -95,14 +81,14 @@ async fn agent_server() -> Result<(), Error> {
     Ok(())
 }
 
-
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // initialize tracing
-    let targets = filter::Targets::new()
-        .with_target("sssnake", tracing::Level::DEBUG)
+    let targets = filter::Targets::new().with_target("sssnake", tracing::Level::INFO);
+    /*
         .with_target("tower_http", tracing::Level::DEBUG)
         .with_target("axum::rejection", tracing::Level::TRACE);
+    */
 
     tracing_subscriber::registry()
         .with(targets)
