@@ -5,7 +5,7 @@ n=64
 
 # Create a function to run battlesnake instances
 run_battlesnake() {
-    battlesnake --verbose play -v -s -n 1 -u http://localhost:3000 -u http://localhost:3000
+    battlesnake --verbose play -v -s -n player1 -u http://localhost:3000 -n player2 -u http://localhost:3000
 }
 
 # Start the initial set of processes
