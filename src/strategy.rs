@@ -217,10 +217,11 @@ impl Agent {
         // turn when we have the q valuest for the resulting state we can add it to our replay
         // buffer
         if let Some(prior_move) = self.prior_moves.insert(my_snake, Move { state, action }) {
+            const GAMMA: f32 = 0.99;
             // Now that we have the target max Q in St we can add Q(St-1, At-1) to the replay buffer
             self.experiences.push(Experience {
                 action: prior_move,
-                q_value: q_values[arg_max],
+                q_value: 1.0 + GAMMA * q_values[arg_max],
             });
         }
 
@@ -238,7 +239,7 @@ impl Agent {
                 .into_iter()
                 .find(|snake| snake.id == my_snake.id)
             {
-                Some(_) => 10.0, // Winning is nice
+                Some(_) => 1.0, // Winning is nice
                 None => -100.0,  // Losing is the awful
             };
 
