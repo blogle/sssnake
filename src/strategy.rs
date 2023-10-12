@@ -18,7 +18,7 @@ type BasicBlock<const C: usize> = Residual<(
 
 const NUM_ACTIONS: usize = 4;
 type ResNet9 = (
-    (ConvBlock<6, 64>, ConvBlock<64, 128>, MaxPool2D<3, 2, 1>),
+    (ConvBlock<F_C, 64>, ConvBlock<64, 128>, MaxPool2D<3, 2, 1>),
     (BasicBlock<128>, ReLU),
     (ConvBlock<128, 256>, MaxPool2D<3, 2, 1>),
     (ConvBlock<256, 512>, MaxPool2D<3, 2, 1>),
@@ -26,54 +26,83 @@ type ResNet9 = (
     (AvgPoolGlobal, Linear<512, NUM_ACTIONS>),
 );
 
+type DQN = <ResNet9 as BuildOnDevice<AutoDevice, f32>>::Built;
+
+const HEIGHT: usize = 4;
+const WIDTH: usize = 4;
+const F_H: usize = HEIGHT + 2;
+const F_W: usize = WIDTH + 2;
+const F_C: usize = 6;
+
 #[derive(Clone)]
 struct State {
-    tensor: [[[f32; 11]; 11]; 6],
+    tensor: [[[f32; F_W]; F_H]; F_C],
 }
 
 impl State {
+
     fn from_gamestate(game_state: crate::GameState) -> Self {
-        let mut tensor = [[[f32::NAN; 11]; 11]; 6];
+        // Features
+        // Channel 0: one-hot encoding of food positions
+        // Channel 1: one-hot encoding of my snakes head position
+        // Channel 2: one-hot encoding of oponent snakes head posiitions 
+        // Channel 3: one-hot encoding of any obstacles on the board (walls, tails)
+        // Channel 4-5: vector field of obstacle movement
+        // Note: The height and width are padded so we can model the edges of the board as obstacles,
+        // also the y axis is inverted (0, 0) refers to the bottom left cell of the board
+        
+        let mut tensor = [[[0.0; F_W]; F_H]; F_C];
+        let my_snake = game_state.you;
         let snakes = game_state.board.snakes;
 
-        let my_snake = game_state.you;
-        let my_health = my_snake.health as f32;
-
-        // Otherwise we need to generate the features that we will feed into the network.
-        let mut segment = my_snake.head;
-        let (x, y) = (segment.x as usize, 10 - segment.y as usize);
-        for pos in &my_snake.body[1..] {
-            let (x, y) = (pos.x as usize, 10 - pos.y as usize);
-            tensor[0][y][x] = segment.x as f32;
-            tensor[1][y][x] = 10.0 - segment.y as f32;
-            segment = *pos;
-        }
-
+        // Populate channel 0 of the tensor - one-hot encoding of food positions
         for pos in &game_state.board.food {
-            let (x, y) = (pos.x as usize, 10 - pos.y as usize);
-            tensor[4][y][x] = my_health;
+            tensor[0][pos.y + 1][pos.x + 1] = 1.0;
         }
 
-        // There is still an opponent on the board
-        if let Some(their_snake) = snakes.iter().find(|snake| snake.id != my_snake.id) {
-            let their_health = their_snake.health as f32;
-            let mut segment = their_snake.head;
-            let (x, y) = (segment.x as usize, 10 - segment.y as usize);
-            for pos in &their_snake.body[1..] {
-                let (x, y) = (pos.x as usize, 10 - pos.y as usize);
-                tensor[2][y][x] = segment.x as f32;
-                tensor[3][y][x] = 10.0 - segment.y as f32;
-                segment = *pos;
+        for snake in &snakes {
+            let mut next_pos = snake.head;
+            let (x, y) = (next_pos.x + 1, next_pos.y + 1);
+            if snake.id == my_snake.id {
+                // Populate channel 1 of the tensor - one-hot encoding of my snakes head position
+                tensor[1][y][x] = 1.0;
+            } else {
+                // Populate channel 2 of the tensor - one-hot encoding of opponent snakes head positions
+                tensor[2][y][x] = 1.0;
             }
 
-            for pos in game_state.board.food {
-                let (x, y) = (pos.x as usize, 10 - pos.y as usize);
-                tensor[5][y][x] = their_health;
+            // Populate channels 3, 4 and 5 with the snake tail obstacles and directions
+            for pos in &snake.body[1..] {
+
+                // The battlesnake cli gives us duplicate segments
+                if *pos == next_pos { 
+                    break
+                };
+
+                let (x, y) = (pos.x + 1, pos.y + 1);
+                tensor[3][y][x] = 1.0;
+                tensor[4][y][x] = (next_pos.x as isize - pos.x as isize) as f32;
+                tensor[5][y][x] = (next_pos.y as isize - pos.y as isize) as f32;
+                next_pos = *pos;
             }
+        }
+
+        // Populate channel 3 of the tensor with the walls
+        // Top and bottom walls
+        for x in 0..F_W {
+            tensor[3][0][x] = 1.0;
+            tensor[3][F_H - 1][x] = 1.0;
+        }
+
+        // Left and right walls
+        for y in 0..F_H {
+            tensor[3][y][0] = 1.0;
+            tensor[3][y][F_W - 1] = 1.0;
         }
 
         State { tensor }
     }
+
 }
 
 #[derive(Clone)]
@@ -87,9 +116,8 @@ struct Experience {
     q_value: f32,
 }
 
-type DQN = <ResNet9 as BuildOnDevice<AutoDevice, f32>>::Built;
 
-fn flatten(tensor: &[[[f32; 11]; 11]; 6]) -> &[f32; 6 * 11 * 11] {
+fn flatten(tensor: &[[[f32; F_W]; F_H]; F_C]) -> &[f32; F_C * F_H * F_W] {
     unsafe { std::mem::transmute(tensor) }
 }
 
@@ -167,7 +195,7 @@ impl Agent {
     }
 
     fn decay_epsilon(&self) {
-        const DECAY_RATE: f64 = 0.9995;
+        const DECAY_RATE: f64 = 0.9;
         const MINIMUM_EPSILON: f64 = 0.05;
 
         let epsilon = self.epsilon();
@@ -182,6 +210,7 @@ impl Agent {
     pub fn play(&self, state: crate::GameState) -> crate::Direction {
         let my_snake = state.you.id.clone();
         let state = State::from_gamestate(state);
+
         let model = self.model.read().unwrap();
 
         // Get the q values for the current state
@@ -280,7 +309,7 @@ impl Agent {
 
             // epoch
             for _ in 0..20 {
-                let mut state_batch: Vec<f32> = Vec::with_capacity(128 * 6 * 11 * 11);
+                let mut state_batch: Vec<f32> = Vec::with_capacity(128 * F_C * F_H * F_W);
                 let mut action_batch = Vec::with_capacity(128);
                 let mut target_batch = Vec::with_capacity(128);
 
@@ -294,7 +323,7 @@ impl Agent {
                     target_batch.push(q_value)
                 }
 
-                let state_batch_dev: Tensor<Rank4<128, 6, 11, 11>, f32, _> =
+                let state_batch_dev: Tensor<Rank4<128, F_C, F_H, F_H>, f32, _> =
                     self.device.tensor(state_batch);
                 let action_batch_dev: Tensor<Rank1<128>, usize, _> =
                     self.device.tensor(action_batch);
@@ -337,7 +366,7 @@ mod test {
         let dev = AutoDevice::default();
         let m = dev.build_module::<ResNet9, f32>();
 
-        let x: Tensor<Rank4<30, 6, 11, 11>, f32, _> = dev.ones();
+        let x: Tensor<Rank4<30, F_C, F_H, F_W>, f32, _> = dev.ones();
         let start = std::time::Instant::now();
         let samples = 30;
         for _ in 0..samples {

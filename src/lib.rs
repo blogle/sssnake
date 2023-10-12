@@ -17,16 +17,16 @@ pub struct Game {
     source: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 pub struct Coordinate {
-    x: i32,
-    y: i32,
+    x: usize,
+    y: usize,
 }
 
 #[derive(Deserialize)]
 pub struct Board {
-    height: u32,
-    width: u32,
+    height: usize,
+    width: usize,
     food: Vec<Coordinate>,
     hazards: Vec<Coordinate>,
     pub snakes: Vec<Snake>,
@@ -40,14 +40,14 @@ pub struct Snake {
     body: Vec<Coordinate>,
     latency: String,
     head: Coordinate,
-    length: u32,
+    length: usize,
     shout: String,
 }
 
 #[derive(Deserialize)]
 pub struct GameState {
     game: Game,
-    turn: u32,
+    turn: usize,
     pub board: Board,
     you: Snake,
 }
