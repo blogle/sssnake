@@ -111,6 +111,7 @@ struct Move {
     action: crate::Direction,
 }
 
+#[derive(Clone)]
 struct Experience {
     action: Move,
     q_value: f32,
@@ -130,6 +131,10 @@ impl ReplayBuffer {
         ReplayBuffer {
             buffer: crossbeam::queue::ArrayQueue::new(1000),
         }
+    }
+
+    fn len(&self) -> usize {
+        self.buffer.len()
     }
 
     fn push(&self, experience: Experience) {
@@ -152,10 +157,10 @@ impl ReplayBuffer {
         while experiences.len() < batch_size {
             let sample = self.pop();
             if rand::random() {
-                experiences.push(sample);
-            } else {
-                self.buffer.force_push(sample);
+                experiences.push(sample.clone());
             }
+
+            self.push(sample);
         }
 
         experiences
