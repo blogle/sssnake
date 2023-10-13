@@ -312,32 +312,34 @@ impl Agent {
         );
 
         let mut grads = learner.alloc_grads();
+        const BATCH_SIZE: usize = 128;
+        const EPISODES: f32 = 20.0;
 
         let start = std::time::Instant::now();
         for epoch in 1.. {
             let mut total_loss = 0.0;
 
             // epoch
-            for _ in 0..20 {
-                let mut state_batch: Vec<f32> = Vec::with_capacity(128 * F_C * F_H * F_W);
-                let mut action_batch = Vec::with_capacity(128);
-                let mut target_batch = Vec::with_capacity(128);
+            for _ in 0..EPISODES as usize {
+                let mut state_batch: Vec<f32> = Vec::with_capacity(BATCH_SIZE * F_C * F_H * F_W);
+                let mut action_batch = Vec::with_capacity(BATCH_SIZE);
+                let mut target_batch = Vec::with_capacity(BATCH_SIZE);
 
                 for Experience {
                     action: Move { state, action },
                     q_value,
-                } in self.experiences.sample(128)
+                } in self.experiences.sample(BATCH_SIZE)
                 {
                     state_batch.extend(flatten(&state.tensor));
                     action_batch.push(action as usize);
                     target_batch.push(q_value)
                 }
 
-                let state_batch_dev: Tensor<Rank4<128, F_C, F_H, F_H>, f32, _> =
+                let state_batch_dev: Tensor<Rank4<BATCH_SIZE, F_C, F_H, F_H>, f32, _> =
                     self.device.tensor(state_batch);
-                let action_batch_dev: Tensor<Rank1<128>, usize, _> =
+                let action_batch_dev: Tensor<Rank1<BATCH_SIZE>, usize, _> =
                     self.device.tensor(action_batch);
-                let target_batch_dev: Tensor<Rank1<128>, f32, _> = self.device.tensor(target_batch);
+                let target_batch_dev: Tensor<Rank1<BATCH_SIZE>, f32, _> = self.device.tensor(target_batch);
 
                 let q_values_dev = learner.forward_mut(state_batch_dev.traced(grads.to_owned()));
                 let action_q = q_values_dev.select(action_batch_dev);
@@ -354,7 +356,7 @@ impl Agent {
 
             tracing::info!(
                 epoch = epoch,
-                loss = total_loss / 20.0,
+                loss = total_loss / EPISODES,
                 elapsed = ?start.elapsed(),
             );
 
