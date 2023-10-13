@@ -39,6 +39,11 @@ struct State {
     tensor: [[[f32; F_W]; F_H]; F_C],
 }
 
+fn coord_idx(coord: &crate::Coordinate) -> (usize, usize) {
+    let (px, py) = (coord.x + 1, coord.y + 1);
+    (px as usize, py as usize)
+}
+
 impl State {
 
     fn from_gamestate(game_state: crate::GameState) -> Self {
@@ -56,13 +61,13 @@ impl State {
         let snakes = game_state.board.snakes;
 
         // Populate channel 0 of the tensor - one-hot encoding of food positions
-        for pos in &game_state.board.food {
-            tensor[0][pos.y + 1][pos.x + 1] = 1.0;
+        for (x, y) in game_state.board.food.iter().map(coord_idx) {
+            tensor[0][y][x] = 1.0;
         }
 
         for snake in &snakes {
             let mut next_pos = snake.head;
-            let (x, y) = (next_pos.x + 1, next_pos.y + 1);
+            let (x, y) = coord_idx(&next_pos);
             if snake.id == my_snake.id {
                 // Populate channel 1 of the tensor - one-hot encoding of my snakes head position
                 tensor[1][y][x] = 1.0;
@@ -79,7 +84,7 @@ impl State {
                     break
                 };
 
-                let (x, y) = (pos.x + 1, pos.y + 1);
+                let (x, y) = coord_idx(pos);
                 tensor[3][y][x] = 1.0;
                 tensor[4][y][x] = (next_pos.x as isize - pos.x as isize) as f32;
                 tensor[5][y][x] = (next_pos.y as isize - pos.y as isize) as f32;

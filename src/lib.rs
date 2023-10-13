@@ -19,8 +19,8 @@ pub struct Game {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 pub struct Coordinate {
-    x: usize,
-    y: usize,
+    x: isize,
+    y: isize,
 }
 
 #[derive(Deserialize)]
