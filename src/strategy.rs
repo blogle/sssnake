@@ -45,17 +45,16 @@ fn coord_idx(coord: &crate::Coordinate) -> (usize, usize) {
 }
 
 impl State {
-
     fn from_gamestate(game_state: crate::GameState) -> Self {
         // Features
         // Channel 0: one-hot encoding of food positions
         // Channel 1: one-hot encoding of my snakes head position
-        // Channel 2: one-hot encoding of oponent snakes head posiitions 
+        // Channel 2: one-hot encoding of opponent snakes head posiitions
         // Channel 3: one-hot encoding of any obstacles on the board (walls, tails)
         // Channel 4-5: vector field of obstacle movement
         // Note: The height and width are padded so we can model the edges of the board as obstacles,
         // also the y axis is inverted (0, 0) refers to the bottom left cell of the board
-        
+
         let mut tensor = [[[0.0; F_W]; F_H]; F_C];
         let my_snake = game_state.you;
         let snakes = game_state.board.snakes;
@@ -78,10 +77,9 @@ impl State {
 
             // Populate channels 3, 4 and 5 with the snake tail obstacles and directions
             for pos in &snake.body[1..] {
-
                 // The battlesnake cli gives us duplicate segments
-                if *pos == next_pos { 
-                    break
+                if *pos == next_pos {
+                    break;
                 };
 
                 let (x, y) = coord_idx(pos);
@@ -107,7 +105,6 @@ impl State {
 
         State { tensor }
     }
-
 }
 
 #[derive(Clone)]
@@ -121,7 +118,6 @@ struct Experience {
     action: Move,
     q_value: f32,
 }
-
 
 fn flatten(tensor: &[[[f32; F_W]; F_H]; F_C]) -> &[f32; F_C * F_H * F_W] {
     unsafe { std::mem::transmute(tensor) }
@@ -340,7 +336,7 @@ impl Agent {
                 .find(|snake| snake.id == my_snake.id)
             {
                 Some(_) => 1.0, // Winning is nice
-                None => -100.0,  // Losing is the awful
+                None => -100.0, // Losing is the awful
             };
 
             // Add terminal state to the replay buffer
@@ -357,8 +353,6 @@ impl Agent {
         let model = self.model.read().unwrap();
         model.clone()
     }
-
-    fn update_model(&self, new_model: &DQN) {}
 
     pub fn train(self: std::sync::Arc<Self>) {
         let mut learner = self.clone_model();
@@ -400,7 +394,8 @@ impl Agent {
                     self.device.tensor(state_batch);
                 let action_batch_dev: Tensor<Rank1<BATCH_SIZE>, usize, _> =
                     self.device.tensor(action_batch);
-                let target_batch_dev: Tensor<Rank1<BATCH_SIZE>, f32, _> = self.device.tensor(target_batch);
+                let target_batch_dev: Tensor<Rank1<BATCH_SIZE>, f32, _> =
+                    self.device.tensor(target_batch);
 
                 let q_values_dev = learner.forward_mut(state_batch_dev.traced(grads.to_owned()));
                 let action_q = q_values_dev.select(action_batch_dev);
