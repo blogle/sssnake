@@ -175,6 +175,7 @@ impl ReplayBuffer {
 pub struct Agent {
     device: AutoDevice,
     model: RwLock<DQN>,
+    stats: ModelStats,
     prior_moves: DashMap<String, Move>,
     epsilon: atomic::AtomicU64,
     experiences: ReplayBuffer,
@@ -185,13 +186,53 @@ pub struct Agent {
 unsafe impl Send for Agent {}
 unsafe impl Sync for Agent {}
 
+struct ModelStats {
+    average_reward: atomic::AtomicU32,
+}
+
+impl Default for ModelStats {
+    fn default() -> Self {
+        ModelStats {
+            average_reward: atomic::AtomicU32::new(0.0f32.to_bits()),
+        }
+    }
+}
+
+impl ModelStats {
+    fn update(&self, turns: usize, reward: f32) {
+        const ALPHA: f32 = 0.65;
+        let current_game_reward = turns as f32 + reward;
+        let average_reward = f32::from_bits(self.average_reward.load(atomic::Ordering::Relaxed));
+        let new_average_reward = average_reward * (1.0 - ALPHA) + current_game_reward * ALPHA;
+        self.average_reward
+            .store(new_average_reward.to_bits(), atomic::Ordering::Relaxed);
+    }
+
+    fn average_reward(&self) -> f32 {
+        f32::from_bits(self.average_reward.load(atomic::Ordering::Relaxed))
+    }
+
+    fn reset(&self) {
+        self.average_reward
+            .store(0.0f32.to_bits(), atomic::Ordering::Relaxed);
+    }
+}
+
 impl Default for Agent {
     fn default() -> Self {
         let device = AutoDevice::default();
-        let model = device.build_module::<ResNet9, f32>();
+        let mut model = device.build_module::<ResNet9, f32>();
+        if let Some(checkpoint) = Self::last_checkpoint() {
+            tracing::info!("Loading checkpoint: {:?}", checkpoint);
+            model
+                .load_safetensors(&checkpoint)
+                .expect("Failed to load checkpoint");
+        }
+
         Self {
             device: device,
             model: RwLock::new(model),
+            stats: ModelStats::default(),
             prior_moves: DashMap::new(),
             epsilon: atomic::AtomicU64::new(1.0f64.to_bits()),
             experiences: ReplayBuffer::new(),
@@ -200,6 +241,26 @@ impl Default for Agent {
 }
 
 impl Agent {
+    const CHECKPOINT_DIR: &'static str = "checkpoints";
+    fn last_checkpoint() -> Option<std::path::PathBuf> {
+        // Create an iterator of all of the files in the checkpoint dir.
+        // Sort the files lexicographically and return the last one.
+        match std::fs::read_dir(Self::CHECKPOINT_DIR)
+            .ok()?
+            .map(|res| res.map(|e| e.path()))
+            .collect::<Result<Vec<_>, std::io::Error>>()
+        {
+            Err(err) => {
+                tracing::error!("Failed to read checkpoint dir: {}", err);
+                None
+            }
+            Ok(mut checkpoints) => {
+                checkpoints.sort();
+                checkpoints.last().cloned()
+            }
+        }
+    }
+
     fn epsilon(&self) -> f64 {
         f64::from_bits(self.epsilon.load(atomic::Ordering::Relaxed))
     }
@@ -287,6 +348,8 @@ impl Agent {
                 action: prior_move,
                 q_value: reward,
             });
+
+            self.stats.update(state.turn, reward);
         }
     }
 
@@ -314,6 +377,8 @@ impl Agent {
         let mut grads = learner.alloc_grads();
         const BATCH_SIZE: usize = 128;
         const EPISODES: f32 = 20.0;
+
+        let mut save_threshold: f32 = -20.0;
 
         let start = std::time::Instant::now();
         for epoch in 1.. {
@@ -360,11 +425,39 @@ impl Agent {
                 elapsed = ?start.elapsed(),
             );
 
-            // Update the target network
-            self.update_model(&learner);
+            // Prevent anyone from using the model while we are updating it
+            {
+                let mut guard = self.model.write().unwrap();
 
-            // Decay epsilon
-            self.decay_epsilon();
+                // Before saving check if the prior model is worth saving
+                let avg_epsisodic_reward = self.stats.average_reward();
+                if avg_epsisodic_reward > save_threshold {
+                    let now = chrono::Utc::now();
+                    let date = now.format("%Y%m%d");
+                    let time = now.format("%H%M%S");
+                    let filename = format!("qsssnake-{}-{}-{:06}.safetensors", date, time, epoch);
+                    let path = std::path::Path::new(Self::CHECKPOINT_DIR).join(filename);
+
+                    tracing::info!(
+                        path = path.display().to_string(),
+                        avg_reward = avg_epsisodic_reward,
+                        "Saving model"
+                    );
+                    guard.save_safetensors(&path).expect("Failed to save model");
+
+                    // The next model needs to be 5% better than this one
+                    save_threshold = 1.05 * avg_epsisodic_reward;
+
+                    // Reset the stats for the next epoch
+                    self.stats.reset();
+                }
+
+                // Update the target network
+                guard.clone_from(&learner);
+
+                // Decay epsilon
+                self.decay_epsilon();
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.75"
 axum = "0.6.20"
+chrono = "0.4.31"
 crossbeam = "0.8.2"
 dashmap = "5.5.3"
 dfdx = { version = "0.13.0", features = ["cuda", "cudnn", "f16", "safetensors", "nightly"]}
