@@ -28,8 +28,8 @@ type ResNet9 = (
 
 type DQN = <ResNet9 as BuildOnDevice<AutoDevice, f32>>::Built;
 
-const HEIGHT: usize = 4;
-const WIDTH: usize = 4;
+const HEIGHT: usize = 11;
+const WIDTH: usize = 11;
 const F_H: usize = HEIGHT + 2;
 const F_W: usize = WIDTH + 2;
 const F_C: usize = 6;
@@ -262,7 +262,7 @@ impl Agent {
     }
 
     fn decay_epsilon(&self) {
-        const DECAY_RATE: f64 = 0.9;
+        const DECAY_RATE: f64 = 0.995;
         const MINIMUM_EPSILON: f64 = 0.05;
 
         let epsilon = self.epsilon();
