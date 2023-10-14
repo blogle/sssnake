@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use dfdx::data::IteratorStackExt;
 use dfdx::losses::huber_loss;
-use dfdx::optim::{Momentum, Sgd, SgdConfig};
+use dfdx::optim::{Adam, AdamConfig, Momentum};
 use dfdx::prelude::*;
 use rand::Rng;
 use std::sync::{atomic, RwLock};
@@ -358,23 +358,19 @@ impl Agent {
         model.clone()
     }
 
-    fn update_model(&self, new_model: &DQN) {
-        self.model.write().unwrap().clone_from(new_model);
-    }
+    fn update_model(&self, new_model: &DQN) {}
 
     pub fn train(self: std::sync::Arc<Self>) {
         let mut learner = self.clone_model();
-
-        let mut optimizer = Sgd::new(
+        let mut grads = learner.alloc_grads();
+        let mut optimizer = Adam::new(
             &learner,
-            SgdConfig {
-                lr: 1e-1,
-                momentum: Some(Momentum::Nesterov(0.9)),
-                weight_decay: None,
+            AdamConfig {
+                lr: 1e-3,
+                ..Default::default()
             },
         );
 
-        let mut grads = learner.alloc_grads();
         const BATCH_SIZE: usize = 128;
         const EPISODES: f32 = 20.0;
 
