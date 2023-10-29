@@ -1,15 +1,17 @@
 #![feature(generic_const_exprs)]
 use serde::{Deserialize, Serialize};
 
+pub mod board_api;
+pub mod db;
 pub mod strategy;
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct Ruleset {
     name: String,
     version: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct Game {
     id: String,
     ruleset: Ruleset,
@@ -61,7 +63,7 @@ pub enum Direction {
     Right = 3,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct Move {
     #[serde(rename = "move")]
     pub direction: Direction,

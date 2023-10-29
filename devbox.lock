@@ -12,6 +12,12 @@
       "resolved": "github:NixOS/nixpkgs/8b5ab8341e33322e5b66fb46ce23d724050f6606#cudaPackages.cudnn",
       "source": "devbox-search",
       "version": "11-cudnn-8.9.1"
+    },
+    "sqlite@latest": {
+      "last_modified": "2023-10-25T20:49:13Z",
+      "resolved": "github:NixOS/nixpkgs/75a52265bda7fd25e06e3a67dee3f0354e73243c#sqlite",
+      "source": "devbox-search",
+      "version": "3.43.1"
     }
   }
 }

@@ -3,7 +3,8 @@
     "path:./rules#battlesnake-rules",
     "cudaPackages.cudatoolkit@latest",
     "cudaPackages.cudnn@latest",
-    "github:oxalica/rust-overlay/master#rust-nightly_2023-09-26"
+    "github:oxalica/rust-overlay/master#rust-nightly_2023-09-26",
+    "sqlite@latest"
   ],
   "env": {
     "CUDA_ROOT": "$PWD/.devbox/virtenv/.wrappers",
