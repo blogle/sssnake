@@ -1,0 +1,39 @@
+diff --git a/cli/commands/play.go b/cli/commands/play.go
+index caabe2d..4017d9b 100644
+--- a/cli/commands/play.go
++++ b/cli/commands/play.go
+@@ -21,7 +21,6 @@ import (
+ 	"github.com/BattlesnakeOfficial/rules/client"
+ 	"github.com/BattlesnakeOfficial/rules/maps"
+ 	"github.com/google/uuid"
+-	"github.com/pkg/browser"
+ 	"github.com/spf13/cobra"
+ 	log "github.com/spf13/jwalterweatherman"
+ )
+@@ -226,13 +225,22 @@ func (gameState *GameState) Run() error {
+ 
+ 		boardURL := fmt.Sprintf(gameState.BoardURL+"?engine=%s&game=%s&autoplay=true", serverURL, gameState.gameID)
+ 
+-		log.INFO.Printf("Opening board URL: %s", boardURL)
+-		if err := browser.OpenURL(boardURL); err != nil {
+-			log.ERROR.Printf("Failed to open browser: %v", err)
+-		}
++        // PATCH: instead of opening the browser we are just
++        // going to send a request to the server to start siphoning off events
++        go func() {
++		    res, _, err := gameState.httpClient.Get(boardURL)
++            if err != nil {
++                log.ERROR.Printf("Failed to initiate socket with server", err)
++
++            }
++            if res.StatusCode != http.StatusOK {
++                log.WARN.Printf("While trying to publish events to url, got status code %v", res.StatusCode)
++            }
++        }()
+ 
+ 		// send turn zero to websocket server
+ 		boardServer.SendEvent(gameState.buildFrameEvent(boardState))
++        
+ 	}
+ 
+ 	log.INFO.Printf("Ruleset: %v, Seed: %v", gameState.GameType, gameState.Seed)

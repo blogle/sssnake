@@ -48,8 +48,8 @@ impl State {
     fn from_gamestate(game_state: crate::GameState) -> Self {
         // Features
         // Channel 0: one-hot encoding of food positions
-        // Channel 1: one-hot encoding of my snakes head position
-        // Channel 2: one-hot encoding of opponent snakes head posiitions
+        // Channel 1: encoding of my snakes head position - cell contains health of my snake
+        // Channel 2: encoding of opponent snakes head posiitions - cells contain health of opponent snakes
         // Channel 3: one-hot encoding of any obstacles on the board (walls, tails)
         // Channel 4-5: vector field of obstacle movement
         // Note: The height and width are padded so we can model the edges of the board as obstacles,
@@ -69,10 +69,10 @@ impl State {
             let (x, y) = coord_idx(&next_pos);
             if snake.id == my_snake.id {
                 // Populate channel 1 of the tensor - one-hot encoding of my snakes head position
-                tensor[1][y][x] = 1.0;
+                tensor[1][y][x] = snake.health as f32;
             } else {
                 // Populate channel 2 of the tensor - one-hot encoding of opponent snakes head positions
-                tensor[2][y][x] = 1.0;
+                tensor[2][y][x] = snake.health as f32;
             }
 
             // Populate channels 3, 4 and 5 with the snake tail obstacles and directions
